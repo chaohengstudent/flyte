@@ -421,6 +421,110 @@ func ToK8sPodSpec(ctx context.Context, tCtx pluginsCore.TaskExecutionContext) (*
 	return podSpec, objectMeta, primaryContainerName, nil
 }
 
+// TODO: UPDATE COMMENT
+// ApplyFlyteagentPodConfiguration updates the PodSpec and ObjectMeta with various Flyte configuration. This includes
+// applying default k8s configuration, resource requests, injecting copilot containers, and merging with the
+// configuration PodTemplate (if exists).
+func ApplyFlyteagentPodConfiguration(ctx context.Context, tCtx pluginsCore.TaskExecutionContext, podSpec *v1.PodSpec, objectMeta *metav1.ObjectMeta, primaryContainerName string) (*v1.PodSpec, *metav1.ObjectMeta, error) {
+	taskTemplate, err := tCtx.TaskReader().Read(ctx)
+	if err != nil {
+		logger.Warnf(ctx, "failed to read task information when trying to construct Pod, err: %s", err.Error())
+		return nil, nil, err
+	}
+
+	// add flyte resource customizations to containers
+	templateParameters := template.Parameters{
+		Inputs:           tCtx.InputReader(),
+		OutputPath:       tCtx.OutputWriter(),
+		Task:             tCtx.TaskReader(),
+		TaskExecMetadata: tCtx.TaskExecutionMetadata(),
+	}
+
+	resourceRequests := make([]v1.ResourceRequirements, 0, len(podSpec.Containers))
+	var primaryContainer *v1.Container
+	for index, container := range podSpec.Containers {
+		var resourceMode = ResourceCustomizationModeEnsureExistingResourcesInRange
+		if container.Name == primaryContainerName {
+			resourceMode = ResourceCustomizationModeMergeExistingResources
+		}
+
+		if err := AddFlyteCustomizationsToContainer(ctx, templateParameters, resourceMode, &podSpec.Containers[index]); err != nil {
+			return nil, nil, err
+		}
+
+		resourceRequests = append(resourceRequests, podSpec.Containers[index].Resources)
+		if container.Name == primaryContainerName {
+			primaryContainer = &podSpec.Containers[index]
+		}
+	}
+
+	if primaryContainer == nil {
+		return nil, nil, pluginserrors.Errorf(pluginserrors.BadTaskSpecification, "invalid TaskSpecification, primary container [%s] not defined", primaryContainerName)
+	}
+
+	// add copilot configuration to primaryContainer and PodSpec (if necessary)
+	var dataLoadingConfig *core.DataLoadingConfig
+	if container := taskTemplate.GetContainer(); container != nil {
+		dataLoadingConfig = container.GetDataConfig()
+	} else if pod := taskTemplate.GetK8SPod(); pod != nil {
+		dataLoadingConfig = pod.GetDataConfig()
+	}
+
+	if dataLoadingConfig != nil {
+		if err := AddCoPilotToContainer(ctx, config.GetK8sPluginConfig().CoPilot,
+			primaryContainer, taskTemplate.Interface, dataLoadingConfig); err != nil {
+			return nil, nil, err
+		}
+
+		if err := AddCoPilotToPod(ctx, config.GetK8sPluginConfig().CoPilot, podSpec, taskTemplate.GetInterface(),
+			tCtx.TaskExecutionMetadata(), tCtx.InputReader(), tCtx.OutputWriter(), dataLoadingConfig); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// update primaryContainer and PodSpec with k8s plugin configuration, etc
+	UpdatePod(tCtx.TaskExecutionMetadata(), resourceRequests, podSpec)
+	if primaryContainer.SecurityContext == nil && config.GetK8sPluginConfig().DefaultSecurityContext != nil {
+		primaryContainer.SecurityContext = config.GetK8sPluginConfig().DefaultSecurityContext.DeepCopy()
+	}
+
+	// merge PodSpec and ObjectMeta with configuration pod template (if exists)
+	podSpec, objectMeta, err = MergeWithBasePodTemplate(ctx, tCtx, podSpec, objectMeta, primaryContainerName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// handling for extended resources
+	// Merge overrides with base extended resources
+	extendedResources := applyExtendedResourcesOverrides(
+		taskTemplate.GetExtendedResources(),
+		tCtx.TaskExecutionMetadata().GetOverrides().GetExtendedResources(),
+	)
+
+	// GPU accelerator
+	if extendedResources.GetGpuAccelerator() != nil {
+		ApplyGPUNodeSelectors(podSpec, extendedResources.GetGpuAccelerator())
+	}
+
+	return podSpec, objectMeta, nil
+}
+
+func ToAgentPodSpec(ctx context.Context, tCtx pluginsCore.TaskExecutionContext) (*v1.PodSpec, *metav1.ObjectMeta, string, error) {
+	// Build raw PodSpec and ObjectMeta
+	podSpec, objectMeta, primaryContainerName, err := BuildRawPod(ctx, tCtx)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	// add flyte configuration
+	podSpec, objectMeta, err = ApplyFlyteagentPodConfiguration(ctx, tCtx, podSpec, objectMeta, primaryContainerName)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	return podSpec, objectMeta, primaryContainerName, nil
+}
+
 func GetContainer(podSpec *v1.PodSpec, name string) (*v1.Container, error) {
 	for _, container := range podSpec.Containers {
 		if container.Name == name {
