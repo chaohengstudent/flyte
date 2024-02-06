@@ -263,6 +263,7 @@ func (c CorePlugin) Handle(ctx context.Context, tCtx core.TaskExecutionContext) 
 			return core.UnknownTransition, err
 		}
 
+		// get Config to modified
 		c.p.GetConfig()
 
 		if len(c.p.GetConfig().ResourceQuotas) > 0 {

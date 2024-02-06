@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"github.com/flyteorg/flyte/flyteidl/gen/pb-go/flyteidl/service"
 	"time"
 
 	"golang.org/x/exp/maps"
@@ -84,6 +85,8 @@ func (p Plugin) Create(ctx context.Context, taskCtx webapi.TaskExecutionContextR
 
 	// try edit default agent config
 	agent := getFinalAgent(taskTemplate.Type, p.cfg, p.agentRegistry)
+	conn, err := getGrpcConnection(ctx, agent)
+	p.cs.agentClients[agent.Endpoint] = service.NewAsyncAgentServiceClient(conn)
 
 	client := p.cs.agentClients[agent.Endpoint]
 	if client == nil {
@@ -241,6 +244,10 @@ func writeOutput(ctx context.Context, taskCtx webapi.StatusContext, resource Res
 func getFinalAgent(taskType string, cfg *Config, agentRegistry map[string]*Agent) *Agent {
 	if agent, exists := agentRegistry[taskType]; exists {
 		return agent
+	}
+
+	if &cfg.AutoScalerAgent != nil {
+		return &cfg.AutoScalerAgent
 	}
 
 	return &cfg.DefaultAgent
