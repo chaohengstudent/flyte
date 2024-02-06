@@ -95,6 +95,7 @@ func (p Plugin) Create(ctx context.Context, taskCtx webapi.TaskExecutionContextR
 	}
 	outputPrefix := taskCtx.OutputWriter().GetOutputPrefixPath().String()
 
+	// try edit default agent config
 	agent := getFinalAgent(taskTemplate.Type, p.cfg, p.agentRegistry)
 
 	client, err := p.getClient(ctx, agent, p.connectionCache)

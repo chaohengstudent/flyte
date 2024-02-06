@@ -263,6 +263,8 @@ func (c CorePlugin) Handle(ctx context.Context, tCtx core.TaskExecutionContext) 
 			return core.UnknownTransition, err
 		}
 
+		c.p.GetConfig()
+
 		if len(c.p.GetConfig().ResourceQuotas) > 0 {
 			nextState, phaseInfo, err = c.tokenAllocator.allocateToken(ctx, c.p, tCtx, &incomingState, c.metrics)
 		} else {

@@ -66,6 +66,8 @@ type Config struct {
 	// The agents used to match against specific task types. {AgentId: Agent}
 	Agents map[string]*Agent `json:"agents" pflag:",The agents."`
 
+	// auto scalar config
+
 	// Maps task types to their agents. {TaskType: AgentId}
 	AgentForTaskTypes map[string]string `json:"agentForTaskTypes" pflag:"-,"`
 
